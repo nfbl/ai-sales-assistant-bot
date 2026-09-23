@@ -190,8 +190,10 @@ async def process(bot: Bot, user: User, text: str) -> None:
     if d.stage == "qualifying" and is_ready(d.fields):
         course = recommend(d.fields, school, d.course_id)
         d.course_id = course.id
-        reply = res.reply or (f"Спасибо! Вам подойдёт «{course.title}» — {rub(course.price)} в месяц. "
-                              "Первый урок бесплатный: 30 минут с преподавателем и тест уровня.")
+        # Рекомендацию ИИ берём, только если он назвал курс точно как в базе — иначе собираем сами
+        reply = res.reply if course.title in res.reply else (
+            f"Спасибо! Вам подойдёт «{course.title}» — {rub(course.price)} в месяц. {course.description} "
+            "Первый урок бесплатный: 30 минут с преподавателем и тест уровня.")
         d.stage = "contact"
         await bot.send_message(user.id, reply, parse_mode=None)
         await bot.send_message(user.id, CONTACT_TEXT, reply_markup=PHONE_KB)

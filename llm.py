@@ -44,8 +44,11 @@ class LLM:
             return GigaChat(credentials=s.llm_api_key, model=self.model, verify_ssl_certs=False)
         raise SystemExit(f"Неизвестный LLM_PROVIDER: {self.provider}")
 
-    async def complete(self, system: str, history: list[dict], json_mode: bool = False) -> str | None:
-        """Ответ модели или None, если ИИ выключен или API недоступен."""
+    async def complete(self, system: str, history: list[dict], schema: dict | None = None) -> str | None:
+        """Ответ модели или None, если ИИ выключен или API недоступен.
+
+        schema — JSON-схема ответа: для OpenAI-совместимых API включает строгий режим,
+        в котором модель не может ответить не по формату."""
         messages = list(history)
         while messages and messages[0]["role"] != "user":
             messages.pop(0)
@@ -53,13 +56,7 @@ class LLM:
             return None
         try:
             if self.provider == "openai":
-                extra = {"response_format": {"type": "json_object"}} if json_mode else {}
-                resp = await self.client.chat.completions.create(
-                    model=self.model, temperature=0.3, max_tokens=1500,
-                    messages=[{"role": "system", "content": system}, *messages],
-                    extra_body=self.extra_body, **extra,
-                )
-                return resp.choices[0].message.content
+                return await self._openai(system, messages, schema)
             if self.provider == "anthropic":
                 resp = await self.client.messages.create(
                     model=self.model, system=system, messages=messages, temperature=0.3, max_tokens=1000,
@@ -77,4 +74,23 @@ class LLM:
                 return resp.choices[0].message.content
         except Exception:
             log.exception("Ошибка LLM (%s)", self.provider)
+        return None
+
+    async def _openai(self, system: str, messages: list[dict], schema: dict | None) -> str | None:
+        from openai import BadRequestError
+
+        formats = [None]
+        if schema:
+            formats = [{"type": "json_schema", "json_schema": {"name": "reply", "strict": True, "schema": schema}},
+                       {"type": "json_object"}]  # запасной вариант для API без строгих схем
+        for attempt, fmt in enumerate(formats + formats[-1:]):
+            try:
+                resp = await self.client.chat.completions.create(
+                    model=self.model, temperature=0.3, max_tokens=1500,
+                    messages=[{"role": "system", "content": system}, *messages],
+                    extra_body=self.extra_body, **({"response_format": fmt} if fmt else {}),
+                )
+                return resp.choices[0].message.content
+            except BadRequestError as e:
+                log.warning("LLM отклонил запрос (попытка %d): %s", attempt + 1, e)
         return None

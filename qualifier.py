@@ -34,19 +34,21 @@ QUALIFY_PROMPT = """Ты — менеджер по продажам онлайн
 
 Правила:
 - Цены, курсы, скидки и условия — только из базы знаний. Никогда не выдумывай.
-- Если клиент задал вопрос — сначала ответь на него, затем задай следующий вопрос.
+- Если в последнем сообщении клиента есть вопрос — reply обязательно начинается с ответа на него по базе знаний, и только потом следующий вопрос.
 - Если клиент ответил сразу на несколько вопросов — запиши все поля.
 - Следующий вопрос — про первое поле из «Ещё не известно», которое клиент не назвал в последнем сообщении. Никогда не переспрашивай то, что клиент уже сказал.
 - Спрашивай простыми словами: не перечисляй клиенту коды уровней и названия полей.
+- Если ответ клиента непонятен (например, «а», шутка или не по теме) — вежливо задай тот же вопрос ещё раз.
 - Когда после ответа клиента известны все поля — коротко порекомендуй один курс из базы знаний и предложи бесплатный пробный урок. Телефон не спрашивай — бот запросит его сам.
+- Не обещай звонок менеджера и не говори, что заявка оформлена: это сделает бот, когда клиент оставит телефон.
 - Курсы называй их названиями из базы знаний (не id), цены пиши с пробелом: 12 900 ₽.
 - Пиши коротко: 1–3 предложения, на «вы», без markdown.
 
 Уже известно: {known}
 Ещё не известно: {missing}
 
-Ответь строго одним JSON-объектом:
-{{"reply": "сообщение клиенту", "fields": {{только новые или уточнённые поля}}, "course": "id рекомендованного курса или null"}}
+Ответь JSON-объектом: {{"reply": "сообщение клиенту", "fields": {{...}}, "course": "id курса или null"}}.
+В fields для каждого поля укажи значение, только если клиент сам назвал его в последнем сообщении, иначе null. Никогда не придумывай имя, бюджет и другие данные клиента. course — id рекомендованного курса, когда рекомендуешь курс, иначе null.
 
 База знаний:
 {kb}"""
@@ -55,12 +57,32 @@ DONE_PROMPT = """Ты — менеджер онлайн-школы англий�
 
 Отвечай на вопросы клиента коротко (1–3 предложения), на «вы», без markdown, строго по базе знаний. Чего нет в базе — скажи, что уточнит менеджер. Никогда не выдумывай.
 
-Ответь строго одним JSON-объектом: {{"reply": "сообщение клиенту", "fields": {{}}, "course": null}}
+Ответь JSON-объектом: {{"reply": "сообщение клиенту", "fields": {{все поля null}}, "course": null}}
 
 База знаний:
 {kb}"""
 
+# Строгая схема ответа модели: API не даст ответить не по формату
+REPLY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["reply", "fields", "course"],
+    "properties": {
+        "reply": {"type": "string"},
+        "fields": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": list(REQUIRED),
+            "properties": {k: {"type": ["string", "null"]} for k in REQUIRED},
+        },
+        "course": {"type": ["string", "null"]},
+    },
+}
+
 FALLBACK_DONE = "Спасибо за вопрос! Менеджер уточнит это, когда свяжется с вами."
+NOT_UNDERSTOOD = "Не совсем понял вас 🙂 "
+NAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё \-]{1,39}$")
+DONT_KNOW_RE = re.compile(r"не\s*зна|не\s*уверен|затрудня|не\s*скаж|пока\s*нет|не\s*важно")
 
 
 @dataclass
@@ -96,17 +118,29 @@ def parse_budget(value: str) -> int | str:
     n = max(nums)
     if n < 1000 and re.search(r"тыс|\d\s*[кk]\b", value.lower()):
         n *= 1000
-    return n
+    # «ребёнку 10 лет» — не бюджет
+    return n if 500 <= n <= 500_000 else "не знаю"
 
 
-def normalize(raw: dict) -> dict:
-    """Приводит ответы к единому виду, чтобы по ним можно было считать оценку."""
+def normalize(raw: dict, strict: bool = False) -> dict:
+    """Приводит ответы к единому виду, чтобы по ним можно было считать оценку.
+
+    strict — ответ клиента разбирается без ИИ: нераспознанное не записываем,
+    а «не знаю» принимаем, только если клиент так и написал."""
     out = {}
     for key, value in raw.items():
-        if key not in REQUIRED or value is None or str(value).strip() in ("", "null"):
+        if key not in REQUIRED or value is None or str(value).strip().lower() in ("", "null", "?", "-", "—"):
             continue
         v = str(value).strip()
         low = v.lower()
+        if key == "name":
+            if NAME_RE.match(v) and not DONT_KNOW_RE.search(low) and len(v.split()) <= 3:
+                out[key] = v.title() if v.islower() else v
+            continue
+        if key == "goal":
+            if len(re.findall(r"[a-zа-яё]", low)) >= 3:
+                out[key] = v[:80]
+            continue
         if key == "level":
             latin = v.upper().translate(str.maketrans("АВС", "ABC"))
             m = re.search(r"[ABC][0-2]", latin)
@@ -115,13 +149,33 @@ def normalize(raw: dict) -> dict:
         elif key == "format":
             out[key] = "индивидуально" if "инд" in low else "группа" if "груп" in low else "не знаю"
         elif key == "start":
-            out[key] = ("неделя" if re.search(r"недел|сейчас|сразу|завтра|скорее", low)
+            out[key] = ("неделя" if re.search(r"недел|сейчас|сразу|сегодн|завтра|скорее|срочно", low)
                         else "месяц" if "месяц" in low
-                        else "позже" if re.search(r"позж|не скоро|осень|зим|лет", low) else "не знаю")
+                        else "позже" if re.search(r"позж|не скоро|осен|зимой|летом|весной|через полгода", low)
+                        else "не знаю")
         elif key == "budget":
             out[key] = parse_budget(v)
-        else:
-            out[key] = v[:80]
+        if strict and out.get(key) == "не знаю" and not DONT_KNOW_RE.search(low):
+            del out[key]
+    return out
+
+
+def _numbers(text: str) -> list[int]:
+    return [int(re.sub(r"\D", "", n)) for n in re.findall(r"\d+(?:[  ]\d{3})*", text)]
+
+
+def grounded(fields: dict, user_text: str) -> dict:
+    """Оставляет имя и бюджет, только если клиент действительно их написал — защита от выдумок модели."""
+    out = dict(fields)
+    low = user_text.lower()
+    name = out.get("name")
+    if name and not all(part.lower()[:4] in low for part in str(name).split()):
+        del out["name"]
+    budget = out.get("budget")
+    if isinstance(budget, int):
+        nums = _numbers(user_text)
+        if budget not in nums and budget not in [n * 1000 for n in nums]:
+            del out["budget"]
     return out
 
 
@@ -204,22 +258,44 @@ class Qualifier:
         return template.format(name=self.school.name, known=known, missing=missing, kb=self.kb)
 
     async def step(self, history: list[dict], fields: dict, done: bool, pending: str | None) -> StepResult:
-        raw = await self.llm.complete(self._prompt(fields, done), history[-14:], json_mode=True)
+        raw = await self.llm.complete(self._prompt(fields, done), history[-14:], schema=REPLY_SCHEMA)
         data = _parse_json(raw)
         if data and isinstance(data.get("reply"), str) and data["reply"].strip():
-            new = {} if done else normalize(data.get("fields") or {})
+            new = {}
+            if not done:
+                user_text = " ".join(m["content"] for m in history if m["role"] == "user")
+                new = grounded(normalize(data.get("fields") or {}), user_text)
+                # Страховка: модель иногда не записывает простой ответ на свой же вопрос.
+                # Для полей с понятными значениями разбираем последний ответ сами.
+                asked = next((f for f in REQUIRED if f not in fields), None)
+                last = history[-1]["content"] if history and history[-1]["role"] == "user" else ""
+                rescued = {}
+                for f in ("level", "format", "start", "budget"):
+                    if f not in fields and f not in new and last:
+                        rescued.update(grounded(normalize({f: last}, strict=True), user_text))
+                new.update(rescued)
+                if asked in rescued:
+                    # Модель не услышала ответ на свой же вопрос и переспросит — задаём следующий сами
+                    following = next((f for f in REQUIRED if f not in {**fields, **new}), None)
+                    reply = f"Спасибо! {QUESTIONS[following]}" if following else ""
+                    return StepResult(reply, {**fields, **new}, None, None)
             course = data.get("course") if isinstance(data.get("course"), str) else None
             return StepResult(data["reply"].strip(), {**fields, **new}, course, None)
         return self._scripted(history, fields, done, pending)
 
     def _scripted(self, history: list[dict], fields: dict, done: bool, pending: str | None) -> StepResult:
-        """Сценарий без ИИ: задаём вопросы по порядку и записываем ответы как есть."""
+        """Сценарий без ИИ: задаём вопросы по порядку, непонятные ответы переспрашиваем."""
         if done:
             return StepResult(FALLBACK_DONE, fields, None, None)
         fields = dict(fields)
+        missing = [f for f in REQUIRED if f not in fields]
+        # Если до этого вёл ИИ, он спрашивал про первое неизвестное поле
+        pending = pending or (missing[0] if missing else None)
         last = history[-1]["content"] if history and history[-1]["role"] == "user" else ""
         if pending and last:
-            fields.update(normalize({pending: last}) or {pending: "не знаю"})
+            fields.update(normalize({pending: last}, strict=True))
+            if pending not in fields:
+                return StepResult(NOT_UNDERSTOOD + QUESTIONS[pending], fields, None, pending)
         missing = [f for f in REQUIRED if f not in fields]
         if missing:
             return StepResult(QUESTIONS[missing[0]], fields, None, missing[0])
