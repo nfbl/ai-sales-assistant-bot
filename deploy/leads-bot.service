@@ -1,0 +1,16 @@
+[Unit]
+Description=AI sales assistant Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/opt/leads-bot
+ExecStart=/opt/leads-bot/.venv/bin/python bot.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,95 @@
+"""Битрикс24: создание лида через входящий вебхук (права: CRM)."""
+import html
+import re
+
+import aiohttp
+
+from qualifier import LABELS, TEMPERATURES, Score, rub
+from school import Course
+
+TITLES = {"hot": "Горячий", "warm": "Тёплый", "cold": "Холодный"}
+
+
+class BitrixError(Exception):
+    pass
+
+
+class Bitrix:
+    def __init__(self, webhook: str | None):
+        self.webhook = webhook
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.webhook)
+
+    def lead_url(self, lead_id: int) -> str:
+        portal = re.match(r"https?://[^/]+", self.webhook).group(0)
+        return f"{portal}/crm/lead/details/{lead_id}/"
+
+    async def call(self, method: str, payload: dict) -> dict:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{self.webhook}{method}.json", json=payload) as resp:
+                data = await resp.json(content_type=None)
+        if "error" in data:
+            raise BitrixError(f"{data['error']}: {data.get('error_description', '')}")
+        return data
+
+    async def add_lead(self, fields: dict) -> int:
+        data = await self.call("crm.lead.add", {"fields": fields, "params": {"REGISTER_SONET_EVENT": "Y"}})
+        return int(data["result"])
+
+
+def lead_fields(*, answers: dict, course: Course, score: Score, phone: str | None,
+                username: str | None, history: list[dict]) -> dict:
+    esc = lambda s: html.escape(str(s))
+    budget = answers.get("budget")
+    anketa = [
+        f"{LABELS[k]}: {esc(rub(budget) if k == 'budget' and isinstance(budget, int) else answers.get(k, '—'))}"
+        for k in ("goal", "level", "format", "start", "budget")
+    ]
+    dialog = [f"{'Клиент' if m['role'] == 'user' else 'Бот'}: {esc(m['content'])}" for m in history[-12:]]
+    comments = "<br>".join(
+        [f"<b>Оценка: {TITLES[score.temperature]} ({score.points}/9)</b>"]
+        + [f"• {esc(r)}" for r in score.reasons]
+        + ["", "<b>Анкета</b>"] + anketa
+        + [f"Рекомендованный курс: {esc(course.title)} — {rub(course.price)}/мес"]
+        + ["", "<b>Переписка</b>"] + dialog
+    )
+    fields = {
+        "TITLE": f"{TITLES[score.temperature]} лид — {course.title}",
+        "NAME": answers.get("name", ""),
+        "STATUS_ID": "NEW",
+        "SOURCE_ID": "OTHER",
+        "SOURCE_DESCRIPTION": "Telegram-бот",
+        "OPPORTUNITY": course.price,
+        "CURRENCY_ID": "RUB",
+        "COMMENTS": comments,
+    }
+    if phone:
+        fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
+    if username:
+        fields["IM"] = [{"VALUE": username, "VALUE_TYPE": "TELEGRAM"}]
+    return fields
+
+
+def manager_card(*, answers: dict, course: Course, score: Score, phone: str | None,
+                 username: str | None, first_name: str) -> str:
+    esc = lambda s: html.escape(str(s))
+    budget = answers.get("budget")
+    who = esc(answers.get("name") or first_name) + (f" (@{esc(username)})" if username else "")
+    lines = [
+        f"{TEMPERATURES[score.temperature]} лид · {score.points}/9",
+        f"👤 {who}",
+        f"📞 {esc(phone) if phone else 'не оставил — написать в Telegram'}",
+        f"📚 {esc(course.title)} — {rub(course.price)}/мес",
+        "",
+        f"Цель: {esc(answers.get('goal', '—'))}",
+        f"Уровень: {esc(answers.get('level', '—'))} · Формат: {esc(answers.get('format', '—'))}",
+        f"Старт: {esc(answers.get('start', '—'))} · Бюджет: "
+        f"{rub(budget) if isinstance(budget, int) else esc(budget or '—')}",
+        "",
+        "<b>Почему такая оценка:</b>",
+        *[f"• {esc(r)}" for r in score.reasons],
+    ]
+    return "\n".join(lines)

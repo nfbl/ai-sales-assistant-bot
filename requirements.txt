@@ -1,0 +1,7 @@
+aiogram>=3.13
+python-dotenv>=1.0
+tzdata>=2024.1
+# ИИ-провайдеры — ставьте только нужный
+openai>=1.40
+anthropic>=0.40
+# gigachat>=0.1.35
