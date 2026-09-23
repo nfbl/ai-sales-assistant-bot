@@ -16,7 +16,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import load_settings
-from crm import Bitrix, lead_fields, manager_card
+from crm import Bitrix, deal_fields, manager_card
 from db import Dialog, Store
 from llm import LLM
 from qualifier import TEMPERATURES, Qualifier, is_ready, recommend, rub, score_lead
@@ -144,7 +144,7 @@ async def cmd_leads(message: Message):
     lines = ["<b>Последние лиды:</b>"]
     for lead in leads:
         course = school.courses.get(lead.course_id)
-        crm_link = f' · <a href="{crm.lead_url(lead.crm_id)}">Б24 #{lead.crm_id}</a>' if lead.crm_id else ""
+        crm_link = f' · <a href="{crm.deal_url(lead.crm_id)}">Б24 #{lead.crm_id}</a>' if lead.crm_id else ""
         lines.append(f"{TEMPERATURES[lead.temperature].split()[0]} {lead.created_at:%d.%m %H:%M} "
                      f"{html.escape(lead.name or '—')} · {course.title if course else lead.course_id} · "
                      f"{html.escape(lead.phone or 'без телефона')}{crm_link}")
@@ -214,13 +214,13 @@ async def finish(bot: Bot, d: Dialog, phone: str | None) -> None:
     crm_id, crm_note = None, "⚠️ Битрикс24 не подключён — лид сохранён только в боте."
     if crm.enabled:
         try:
-            crm_id = await crm.add_lead(lead_fields(
+            crm_id = await crm.add_deal(*deal_fields(
                 answers=d.fields, course=course, score=score, phone=phone,
                 username=d.username, history=d.history,
             ))
-            crm_note = f'🔗 <a href="{crm.lead_url(crm_id)}">Открыть лид в Битрикс24</a>'
+            crm_note = f'🔗 <a href="{crm.deal_url(crm_id)}">Открыть сделку в Битрикс24</a>'
         except Exception as e:
-            log.exception("Не удалось создать лид в Битрикс24")
+            log.exception("Не удалось создать сделку в Битрикс24")
             crm_note = f"⚠️ Ошибка Битрикс24: {html.escape(str(e))[:200]}"
 
     store.add_lead(user_id=d.user_id, name=d.fields.get("name"), phone=phone, course_id=course.id,

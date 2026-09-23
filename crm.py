@@ -1,4 +1,6 @@
-"""Битрикс24: создание лида через входящий вебхук (права: CRM)."""
+"""Битрикс24: контакт + сделка через входящий вебхук (права: CRM).
+
+Сделки, а не лиды: в новых порталах по умолчанию включён режим CRM без лидов."""
 import html
 import re
 
@@ -22,9 +24,9 @@ class Bitrix:
     def enabled(self) -> bool:
         return bool(self.webhook)
 
-    def lead_url(self, lead_id: int) -> str:
+    def deal_url(self, deal_id: int) -> str:
         portal = re.match(r"https?://[^/]+", self.webhook).group(0)
-        return f"{portal}/crm/lead/details/{lead_id}/"
+        return f"{portal}/crm/deal/details/{deal_id}/"
 
     async def call(self, method: str, payload: dict) -> dict:
         timeout = aiohttp.ClientTimeout(total=15)
@@ -35,13 +37,17 @@ class Bitrix:
             raise BitrixError(f"{data['error']}: {data.get('error_description', '')}")
         return data
 
-    async def add_lead(self, fields: dict) -> int:
-        data = await self.call("crm.lead.add", {"fields": fields, "params": {"REGISTER_SONET_EVENT": "Y"}})
+    async def add_deal(self, contact: dict, deal: dict) -> int:
+        """Создаёт контакт и привязанную к нему сделку, возвращает id сделки."""
+        contact_id = int((await self.call("crm.contact.add", {"fields": contact}))["result"])
+        data = await self.call("crm.deal.add", {"fields": {**deal, "CONTACT_ID": contact_id},
+                                                "params": {"REGISTER_SONET_EVENT": "Y"}})
         return int(data["result"])
 
 
-def lead_fields(*, answers: dict, course: Course, score: Score, phone: str | None,
-                username: str | None, history: list[dict]) -> dict:
+def deal_fields(*, answers: dict, course: Course, score: Score, phone: str | None,
+                username: str | None, history: list[dict]) -> tuple[dict, dict]:
+    """Поля контакта и сделки для Битрикс24."""
     esc = lambda s: html.escape(str(s))
     budget = answers.get("budget")
     anketa = [
@@ -56,21 +62,21 @@ def lead_fields(*, answers: dict, course: Course, score: Score, phone: str | Non
         + [f"Рекомендованный курс: {esc(course.title)} — {rub(course.price)}/мес"]
         + ["", "<b>Переписка</b>"] + dialog
     )
-    fields = {
-        "TITLE": f"{TITLES[score.temperature]} лид — {course.title}",
-        "NAME": answers.get("name", ""),
-        "STATUS_ID": "NEW",
+    contact = {"NAME": answers.get("name", ""), "SOURCE_ID": "OTHER", "SOURCE_DESCRIPTION": "Telegram-бот"}
+    if phone:
+        contact["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
+    if username:
+        contact["IM"] = [{"VALUE": username, "VALUE_TYPE": "TELEGRAM"}]
+    deal = {
+        "TITLE": f"{TITLES[score.temperature]} лид — {course.title} ({answers.get('name', '')})",
+        "STAGE_ID": "NEW",
         "SOURCE_ID": "OTHER",
         "SOURCE_DESCRIPTION": "Telegram-бот",
         "OPPORTUNITY": course.price,
         "CURRENCY_ID": "RUB",
         "COMMENTS": comments,
     }
-    if phone:
-        fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
-    if username:
-        fields["IM"] = [{"VALUE": username, "VALUE_TYPE": "TELEGRAM"}]
-    return fields
+    return contact, deal
 
 
 def manager_card(*, answers: dict, course: Course, score: Score, phone: str | None,
