@@ -31,9 +31,9 @@ qualifier = Qualifier(LLM(settings), school)
 crm = Bitrix(settings.bitrix_webhook)
 router = Router()
 
-BTN_COURSES = "Курсы и цены"
-BTN_RESTART = "Начать заново"
-BTN_PHONE = "Отправить номер"
+BTN_COURSES = "📚 Курсы и цены"
+BTN_RESTART = "🔄 Начать заново"
+BTN_PHONE = "📱 Отправить номер"
 BTN_SKIP = "Не сейчас"
 
 MAIN_KB = ReplyKeyboardMarkup(
@@ -45,17 +45,17 @@ PHONE_KB = ReplyKeyboardMarkup(
     resize_keyboard=True, one_time_keyboard=True,
 )
 GOALS = {
-    "work": ("Для работы", "Для работы"),
-    "travel": ("Для путешествий", "Для путешествий"),
-    "exam": ("Экзамен или переезд", "Для экзамена или переезда"),
-    "kids": ("Для ребёнка", "Для ребёнка"),
+    "work": ("💼 Для работы", "Для работы"),
+    "travel": ("✈️ Для путешествий", "Для путешествий"),
+    "exam": ("🎓 Экзамен или переезд", "Для экзамена или переезда"),
+    "kids": ("👧 Для ребёнка", "Для ребёнка"),
 }
 FIRST_QUESTION = "Для чего вам английский?"
 CONTACT_TEXT = ("Чтобы записать вас на бесплатный пробный урок, оставьте номер телефона — "
-                "менеджер перезвонит и подберёт удобное время.")
-NUDGE_QUALIFY = ("Кажется, мы не договорили. Ответьте на последний вопрос — и я подберу вам курс. "
+                "менеджер перезвонит и подберёт удобное время 👇")
+NUDGE_QUALIFY = ("Кажется, мы не договорили 🙂 Ответьте на последний вопрос — и я подберу вам курс. "
                  "Первый урок у нас бесплатный.")
-NUDGE_CONTACT = ("Напомню про бесплатный пробный урок. Оставьте номер — менеджер подберёт удобное время. "
+NUDGE_CONTACT = ("Напомню про бесплатный пробный урок 🙂 Оставьте номер — менеджер подберёт удобное время. "
                  "Или нажмите «Не сейчас».")
 
 
@@ -75,6 +75,16 @@ def goals_kb():
     return kb.as_markup()
 
 
+def menu(button: str):
+    """Фильтр пункта меню: кнопка или её текст без эмодзи, набранный вручную («курсы и цены»)."""
+    label = button.split(" ", 1)[1].lower()
+
+    def match(message: Message) -> bool:
+        text = (message.text or "").strip()
+        return text == button or text.lower() == label
+    return match
+
+
 def is_phone(text: str) -> bool:
     return 10 <= len(re.sub(r"\D", "", text)) <= 12 and not re.search(r"[a-zа-я]", text.lower())
 
@@ -84,7 +94,7 @@ async def start_dialog(bot: Bot, user: User, greet: bool) -> None:
     if greet:
         await bot.send_message(
             user.id,
-            f"Здравствуйте, {html.escape(user.first_name or '')}!\n\n"
+            f"Здравствуйте, {html.escape(user.first_name or '')}! 👋\n\n"
             f"Я помощник онлайн-школы английского «{school.name}». Помогу подобрать курс и записаться "
             "на бесплатный пробный урок — задам пару вопросов, это займёт минуту.",
             reply_markup=MAIN_KB,
@@ -98,15 +108,15 @@ async def start_dialog(bot: Bot, user: User, greet: bool) -> None:
 # ---------- Команды и меню ----------
 
 @router.message(CommandStart())
-@router.message(F.text == BTN_RESTART)
+@router.message(menu(BTN_RESTART))
 async def cmd_start(message: Message, bot: Bot):
     await start_dialog(bot, message.from_user, greet=True)
 
 
-@router.message(F.text == BTN_COURSES)
+@router.message(menu(BTN_COURSES))
 async def show_courses(message: Message):
     kb = InlineKeyboardBuilder()
-    kb.button(text="Подобрать курс", callback_data="pick")
+    kb.button(text="🎯 Подобрать курс", callback_data="pick")
     await message.answer(school.price_list() + "\n\nПервый урок — бесплатно.", reply_markup=kb.as_markup())
 
 
@@ -203,7 +213,7 @@ async def process(bot: Bot, user: User, text: str) -> None:
         await bot.send_message(user.id, res.reply, parse_mode=None)
         d.say("assistant", res.reply)
         if d.stage == "contact":
-            await bot.send_message(user.id, "Оставите номер для пробного урока?", reply_markup=PHONE_KB)
+            await bot.send_message(user.id, "Оставите номер для пробного урока? 👇", reply_markup=PHONE_KB)
 
     d.updated_at, d.nudged = now(), False
     store.save(d)
@@ -213,24 +223,24 @@ async def finish(bot: Bot, d: Dialog, phone: str | None) -> None:
     course = school.courses.get(d.course_id) or recommend(d.fields, school, None)
     score = score_lead(d.fields, course, phone)
 
-    crm_id, crm_note = None, "Битрикс24 не подключён — лид сохранён только в боте."
+    crm_id, crm_note = None, "⚠️ Битрикс24 не подключён — лид сохранён только в боте."
     if crm.enabled:
         try:
             crm_id = await crm.add_deal(*deal_fields(
                 answers=d.fields, course=course, score=score, phone=phone,
                 username=d.username, history=d.history,
             ))
-            crm_note = f'<a href="{crm.deal_url(crm_id)}">Открыть сделку в Битрикс24</a>'
+            crm_note = f'🔗 <a href="{crm.deal_url(crm_id)}">Открыть сделку в Битрикс24</a>'
         except Exception as e:
             log.exception("Не удалось создать сделку в Битрикс24")
-            crm_note = f"Ошибка Битрикс24: {html.escape(str(e))[:200]}"
+            crm_note = f"⚠️ Ошибка Битрикс24: {html.escape(str(e))[:200]}"
 
     store.add_lead(user_id=d.user_id, name=d.fields.get("name"), phone=phone, course_id=course.id,
                    points=score.points, temperature=score.temperature, crm_id=crm_id, now=now())
     d.stage, d.updated_at = "done", now()
     name = html.escape(str(d.fields.get("name") or d.first_name))
     where = "по телефону" if phone else "здесь, в Telegram,"
-    thanks = (f"Спасибо, {name}! Менеджер свяжется с вами {where} и подберёт время пробного урока.\n"
+    thanks = (f"Спасибо, {name}! 🙌 Менеджер свяжется с вами {where} и подберёт время пробного урока.\n"
               f"{school.manager_hours}")
     await bot.send_message(d.user_id, thanks, reply_markup=MAIN_KB)
     d.say("assistant", thanks)
