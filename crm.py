@@ -85,10 +85,10 @@ def manager_card(*, answers: dict, course: Course, score: Score, phone: str | No
     budget = answers.get("budget")
     who = esc(answers.get("name") or first_name) + (f" (@{esc(username)})" if username else "")
     lines = [
-        f"{TEMPERATURES[score.temperature]} лид · {score.points}/9",
-        f"👤 {who}",
-        f"📞 {esc(phone) if phone else 'не оставил — написать в Telegram'}",
-        f"📚 {esc(course.title)} — {rub(course.price)}/мес",
+        f"<b>{TEMPERATURES[score.temperature]} лид · {score.points}/9</b>",
+        f"Клиент: {who}",
+        f"Телефон: {esc(phone) if phone else 'не оставил — написать в Telegram'}",
+        f"Курс: {esc(course.title)} — {rub(course.price)}/мес",
         "",
         f"Цель: {esc(answers.get('goal', '—'))}",
         f"Уровень: {esc(answers.get('level', '—'))} · Формат: {esc(answers.get('format', '—'))}",
