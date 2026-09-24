@@ -263,7 +263,8 @@ class Qualifier:
         if data and isinstance(data.get("reply"), str) and data["reply"].strip():
             new = {}
             if not done:
-                user_text = " ".join(m["content"] for m in history if m["role"] == "user")
+                # Через перевод строки: иначе «недели 2» + «15000» склеятся в число «2 150»
+                user_text = "\n".join(m["content"] for m in history if m["role"] == "user")
                 new = grounded(normalize(data.get("fields") or {}), user_text)
                 # Страховка: модель иногда не записывает простой ответ на свой же вопрос.
                 # Для полей с понятными значениями разбираем последний ответ сами.
@@ -280,7 +281,13 @@ class Qualifier:
                     reply = f"Спасибо! {QUESTIONS[following]}" if following else ""
                     return StepResult(reply, {**fields, **new}, None, None)
             course = data.get("course") if isinstance(data.get("course"), str) else None
-            return StepResult(data["reply"].strip(), {**fields, **new}, course, None)
+            merged = {**fields, **new}
+            missing = next((f for f in REQUIRED if f not in merged), None)
+            reply = data["reply"].strip()
+            if not done and course and missing and "?" not in reply:
+                # Модель уже советует курс, но данных не хватает и вопроса нет — иначе диалог пойдёт по кругу
+                reply += f"\n\nУточню ещё одно, чтобы записать вас на пробный урок. {QUESTIONS[missing]}"
+            return StepResult(reply, merged, course, None)
         return self._scripted(history, fields, done, pending)
 
     def _scripted(self, history: list[dict], fields: dict, done: bool, pending: str | None) -> StepResult:
