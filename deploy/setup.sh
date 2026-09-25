@@ -14,7 +14,8 @@ apt-get install -y -qq git python3 python3-venv >/dev/null </dev/null
 id bot >/dev/null 2>&1 || useradd --system --home "$DIR" --shell /usr/sbin/nologin bot
 
 if [ -d "$DIR/.git" ]; then
-    git -C "$DIR" pull --ff-only
+    # после первой установки папка принадлежит bot, а скрипт идёт от root
+    git -c safe.directory="$DIR" -C "$DIR" pull --ff-only
 else
     mkdir -p "$DIR"
     # .env мог быть скопирован заранее — клонируем рядом и переносим
