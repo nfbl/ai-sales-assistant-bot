@@ -6,8 +6,10 @@ set -euo pipefail
 REPO=https://github.com/nfbl/ai-sales-assistant-bot.git
 DIR=/opt/leads-bot
 
-apt-get update -qq
-apt-get install -y -qq git python3 python3-venv >/dev/null
+# apt на Ubuntu 24.04 (needrestart) читает stdin и съедает остаток скрипта при `bash -s < setup.sh`
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq </dev/null
+apt-get install -y -qq git python3 python3-venv >/dev/null </dev/null
 
 id bot >/dev/null 2>&1 || useradd --system --home "$DIR" --shell /usr/sbin/nologin bot
 
