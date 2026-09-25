@@ -202,7 +202,7 @@ async def process(bot: Bot, user: User, text: str) -> None:
         d.course_id = course.id
         # Рекомендацию ИИ берём, только если он назвал курс точно как в базе — иначе собираем сами
         reply = res.reply if course.title in res.reply else (
-            f"Спасибо! Вам подойдёт «{course.title}» — {rub(course.price)} в месяц. {course.description} "
+            f"Спасибо, {d.fields['name']}! Вам подойдёт «{course.title}» — {rub(course.price)} в месяц. {course.description} "
             "Первый урок бесплатный: 30 минут с преподавателем и тест уровня.")
         d.stage = "contact"
         await bot.send_message(user.id, reply, parse_mode=None)
@@ -232,8 +232,10 @@ async def finish(bot: Bot, d: Dialog, phone: str | None) -> None:
             ))
             crm_note = f'🔗 <a href="{crm.deal_url(crm_id)}">Открыть сделку в Битрикс24</a>'
         except Exception as e:
+            # Например, кончилась подписка портала или удалили вебхук — лид не теряется
             log.exception("Не удалось создать сделку в Битрикс24")
-            crm_note = f"⚠️ Ошибка Битрикс24: {html.escape(str(e))[:200]}"
+            crm_note = (f"⚠️ Битрикс24 не принял сделку ({html.escape(str(e))[:120]}). "
+                        "Лид сохранён в боте — список: /leads")
 
     store.add_lead(user_id=d.user_id, name=d.fields.get("name"), phone=phone, course_id=course.id,
                    points=score.points, temperature=score.temperature, crm_id=crm_id, now=now())
